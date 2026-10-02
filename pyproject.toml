@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smb-platform-kernel"
+version = "1.0.0"
+description = "Shared mechanisms for the requirement and knowledge portals: identity, document extraction, model transport, persistence, observability and service-to-service calls."
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27,<1",
+    "httpx2>=2.13,<3",
+    "openai>=3.8,<4",
+    "openpyxl>=3.1,<4",
+    "Pillow>=12.3,<13",
+    "prometheus-client>=0.21,<1",
+    "psycopg[binary,pool]>=3.2,<4",
+    "pydantic>=2.9,<3",
+    "PyJWT[crypto]>=2.13,<2.14",
+    "pypdf>=6.16.1,<7",
+    "pypdfium2>=4.30,<6",
+    "PyYAML>=6,<7",
+    "starlette>=0.40,<2",
+]
+
+[project.optional-dependencies]
+document-ocr = ["docling>=2.50,<3"]
+dev = [
+    "import-linter>=2.1,<3",
+    "mypy>=1.11,<3",
+    "pytest>=8.3,<10",
+    "pytest-cov>=7,<8",
+    "ruff>=0.8,<1",
+    "types-openpyxl>=3.1,<4",
+    "types-PyYAML>=6,<7",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"smb_kernel" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+
+[tool.coverage.run]
+source = ["smb_kernel"]
+
+[tool.coverage.report]
+skip_covered = true

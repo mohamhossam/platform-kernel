@@ -1,0 +1,35 @@
+[importlinter]
+root_package = smb_kernel
+include_external_packages = True
+
+[importlinter:contract:no_applications]
+name = The kernel must not import either application
+type = forbidden
+source_modules =
+    smb_kernel
+forbidden_modules =
+    smb_requirement_agent
+    knowledge_portal
+
+[importlinter:contract:pure_contracts]
+name = Contract modules stay free of frameworks, drivers and provider SDKs
+type = forbidden
+source_modules =
+    smb_kernel.errors
+    smb_kernel.embeddings
+    smb_kernel.identity.actor
+    smb_kernel.identity.ports
+    smb_kernel.documents.model
+    smb_kernel.documents.ports
+    smb_kernel.time.clock
+forbidden_modules =
+    fastapi
+    starlette
+    pydantic
+    psycopg
+    psycopg_pool
+    openai
+    httpx
+    httpx2
+    jwt
+    prometheus_client

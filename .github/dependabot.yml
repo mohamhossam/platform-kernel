@@ -1,0 +1,19 @@
+# Weekly dependency and action updates as reviewable pull requests, grouped so
+# they stay quiet. Runtime majors are upgraded deliberately, not automatically.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]

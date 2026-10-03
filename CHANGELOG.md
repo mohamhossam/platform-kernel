@@ -3,7 +3,20 @@
 All notable changes to `smb-platform-kernel`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
-## [1.0.0] — unreleased
+## [1.0.1] — 2026-10-03
+
+### Security
+- PyJWT is raised from 2.13 to `>=2.15.1,<2.16`. 2.13.0 carries thirteen advisories published on
+  2026-10-03 (one critical), including forged tokens accepted through HMAC key confusion and
+  JWKS fetches that follow redirects. `OidcIdentityProvider` uses only `get_unverified_header`,
+  `decode` and `PyJWKSet.from_dict`, which keep their behaviour. A key set with no usable keys
+  now raises `PyJWKSetError`, a `PyJWTError`, so it is still reported as identity unavailable.
+
+### Known issues
+- The `OpenAIStructuredOutputClient.parse` cause chain described under 1.0.0 is unchanged; its
+  fix moves to 1.0.2 so this release carries only the security update.
+
+## [1.0.0] — 2026-10-02
 
 First release, extracted from `smb-ai-requirement-agent@d5cfb57` (ADR-0100).
 
@@ -34,4 +47,4 @@ First release, extracted from `smb-ai-requirement-agent@d5cfb57` (ADR-0100).
   `ModelTransportError("invalid_output")` cause that `StructuredResponseValidationError` sets on
   itself, so public error translation cannot classify it as invalid output. The original
   `smb-ai-requirement-agent` behaves the same way, and 1.0.0 keeps that behaviour unchanged.
-  `tests/unit/test_provider_structured_output.py` pins it. The fix is planned for 1.0.1.
+  `tests/unit/test_provider_structured_output.py` pins it. The fix is planned for 1.0.2.

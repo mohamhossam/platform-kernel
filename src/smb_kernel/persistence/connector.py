@@ -82,7 +82,10 @@ class PooledPostgresConnector:
         max_size: int,
         acquire_timeout_seconds: float,
         max_idle_seconds: float,
+        name: str | None = None,
     ) -> None:
+        # The application names its pool, for psycopg_pool's logs and stats;
+        # left unset, the pool takes psycopg_pool's own numbered name.
         self._pool: ConnectionPool[DbConnection] = ConnectionPool(
             database_url,
             min_size=min_size,
@@ -92,7 +95,7 @@ class PooledPostgresConnector:
             # Validate idle connections before handing them out, so a database
             # restart surfaces as a reconnect rather than a failed request.
             check=ConnectionPool.check_connection,
-            name="smb-requirement-agent",
+            name=name,
             open=False,
         )
 

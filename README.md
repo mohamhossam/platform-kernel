@@ -41,7 +41,7 @@ raises.
 dependencies = ["smb-platform-kernel"]
 
 [tool.uv.sources]
-smb-platform-kernel = { git = "https://github.com/mohamhossam/platform-kernel", tag = "v1.0.1" }
+smb-platform-kernel = { git = "https://github.com/mohamhossam/platform-kernel", tag = "v1.0.2" }
 ```
 
 To develop against a local checkout before a release, point the source at the folder instead:

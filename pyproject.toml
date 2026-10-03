@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smb-platform-kernel"
-version = "1.0.0"
+version = "1.0.1"
 description = "Shared mechanisms for the requirement and knowledge portals: identity, document extraction, model transport, persistence, observability and service-to-service calls."
 requires-python = ">=3.12"
 dependencies = [
@@ -16,7 +16,7 @@ dependencies = [
     "prometheus-client>=0.21,<1",
     "psycopg[binary,pool]>=3.2,<4",
     "pydantic>=2.9,<3",
-    "PyJWT[crypto]>=2.13,<2.14",
+    "PyJWT[crypto]>=2.15.1,<2.16",
     "pypdf>=6.16.1,<7",
     "pypdfium2>=4.30,<6",
     "PyYAML>=6,<7",

@@ -3,7 +3,7 @@
 All notable changes to `smb-platform-kernel`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
-## [1.0.2] — unreleased
+## [1.0.2] — 2026-10-03
 
 ### Fixed
 - `OpenAIStructuredOutputClient.parse` keeps `invalid_output` on the cause chain when the SDK

@@ -203,9 +203,10 @@ def test_openai_schema_mismatch_becomes_safe_validation_feedback() -> None:
         )
 
     assert str(raised.value) == "Response validation failed (string_type)."
-    # `raise ... from exc` replaces the invalid_output cause set by the error itself,
-    # so the pydantic error (not a classified kind) is what the chain carries here.
-    assert raised.value.__cause__ is invalid.value
+    # Public translation finds invalid_output; the pydantic error stays beneath it for logs.
+    classified = _model_error(raised.value)
+    assert classified.kind == "invalid_output"
+    assert classified.__cause__ is invalid.value
 
 
 @pytest.mark.parametrize("parsed", [None])

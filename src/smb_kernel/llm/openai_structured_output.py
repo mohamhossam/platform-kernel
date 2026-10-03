@@ -85,7 +85,7 @@ class OpenAIStructuredOutputClient:
                 _classified("invalid_output", exc)
             )
         except ValidationError as exc:
-            raise response_validation_error(exc, "") from exc
+            raise response_validation_error(exc, "") from _classified("invalid_output", exc)
         except openai.OpenAIError as exc:
             raise StructuredOutputError("OpenAI request failed.") from _transport_error(exc)
         if not response.choices:

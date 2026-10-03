@@ -3,6 +3,18 @@
 All notable changes to `smb-platform-kernel`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## [1.0.2] — unreleased
+
+### Fixed
+- `OpenAIStructuredOutputClient.parse` keeps `invalid_output` on the cause chain when the SDK
+  raises a pydantic `ValidationError`. The error is raised from a classified
+  `ModelTransportError("invalid_output")` that carries the pydantic error, so public error
+  translation can classify it again, and the details stay for logs. This is the known issue
+  carried since 1.0.0.
+- `PooledPostgresConnector` no longer names every pool `smb-requirement-agent`. It takes an
+  optional `name`, which the application passes. Left unset, the pool takes psycopg_pool's own
+  numbered name (`pool-1`). Existing calls keep working.
+
 ## [1.0.1] — 2026-10-03
 
 ### Security
@@ -14,7 +26,7 @@ All notable changes to `smb-platform-kernel`. The format follows
 
 ### Known issues
 - The `OpenAIStructuredOutputClient.parse` cause chain described under 1.0.0 is unchanged; its
-  fix moves to 1.0.2 so this release carries only the security update.
+  fix moved to 1.0.2 so this release carries only the security update.
 
 ## [1.0.0] — 2026-10-02
 
@@ -47,4 +59,4 @@ First release, extracted from `smb-ai-requirement-agent@d5cfb57` (ADR-0100).
   `ModelTransportError("invalid_output")` cause that `StructuredResponseValidationError` sets on
   itself, so public error translation cannot classify it as invalid output. The original
   `smb-ai-requirement-agent` behaves the same way, and 1.0.0 keeps that behaviour unchanged.
-  `tests/unit/test_provider_structured_output.py` pins it. The fix is planned for 1.0.2.
+  `tests/unit/test_provider_structured_output.py` pins it. Fixed in 1.0.2.

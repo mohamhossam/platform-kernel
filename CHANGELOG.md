@@ -3,7 +3,63 @@
 All notable changes to `smb-platform-kernel`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
-## [1.1.0] — Unreleased
+## [1.2.0] — Unreleased
+
+Production hardening for requirement-portal (its `docs/slices/production-hardening.md`, Phase 0).
+Everything is additive except the defaults marked **Behaviour change**, which both applications
+receive when they bump.
+
+### Added
+- `PooledPostgresConnector(configure=…)`: runs on each new pooled connection before it is lent,
+  for session settings such as `statement_timeout`; a transaction it leaves open is committed.
+- `PooledPostgresConnector.stats()` returns `PoolStats`: connections lent out and idle, the
+  ceiling, and borrowers waiting.
+- `OidcIdentityProvider` checks:
+  - `access_token_types` (default `("Bearer",)`): a token whose `typ` claim names another kind,
+    such as a Keycloak ID or refresh token, is refused. A token with no `typ` claim is accepted.
+  - `authorized_parties` (default none): when set, the token's `azp` must be one of them, so a
+    token issued to another client for the same audience is refused.
+- `OidcSigningKeys(retry_seconds=…)`, and `OidcIdentityProvider(jwks_retry_seconds=…)`: how long
+  to wait before trying a failed reload again (30s).
+- `OpenAIStructuredOutputClient(max_output_tokens=…)`: caps each reply, sent as
+  `max_completion_tokens`. Unset, nothing is sent, as before.
+- `smb_kernel.http.client.CircuitBreaker`, and `InternalHttpClient(breaker=…)` to share one
+  between clients for the same peer.
+- Metrics:
+  - the Prometheus process, platform and garbage-collector collectors on every `Metrics`
+    registry (`process_*`, `python_info`, `python_gc_*`);
+  - `smb_build_info` (`set_build_info(service, version)`);
+  - `smb_ready` (`set_ready`);
+  - `smb_ai_jobs_queued` by operation and `smb_ai_job_oldest_queued_age_seconds`
+    (`set_ai_job_queue`; an operation missing from a later sample reads 0);
+  - `smb_db_pool_connections` by state (`in_use`, `idle`), `smb_db_pool_max_connections` and
+    `smb_db_pool_requests_waiting`, read on every scrape (`watch_db_pool(connector.stats)`);
+  - `smb_ingestion_failures_total`, `smb_client_errors_total` by kind and
+    `smb_provider_spend_blocked_total` by action.
+
+### Changed
+- **Behaviour change.** `run_migrations` serialises runners on a session advisory lock, so two
+  started together apply each file once; the second waits, then finds nothing left to do.
+- **Behaviour change.** Each migration file waits at most `lock_timeout_seconds` (default 10s;
+  None for no limit) for a lock, so one stuck behind live traffic fails instead of queueing every
+  later query behind it. The run is still one transaction, so it then leaves the database as it
+  was. A file may still set its own `lock_timeout`.
+- **Behaviour change.** `OidcIdentityProvider` and `ServiceJwtVerifier` allow 60s of clock
+  difference with the issuer on `exp`, `nbf` and `iat` (`leeway_seconds`). Before, the
+  provider allowed none, and so did the verifier by default.
+- **Behaviour change.** `OidcSigningKeys` fetches outside its lock. While one caller reloads the
+  keys, the others are answered from the keys already held, and a failed scheduled reload keeps
+  the last good keys in service. Before, every request waited behind a reload, and a failed
+  reload failed every request with "identity unavailable". Callers on a cold cache, or with a
+  token naming a key the cache lacks, still wait for the fetch, and share its outcome. A key the
+  cache lacks while the issuer is unreachable is still "identity unavailable", not an invalid
+  token.
+- **Behaviour change.** Every `InternalHttpClient` has a circuit breaker: after 5 calls in a row
+  fail as unavailable, including failed client-credentials grants, calls fail at once for 30s
+  without contacting the peer or the issuer, then one test call decides. A 4xx answer counts as
+  the peer being up. This reaches knowledge-portal's clients for requirement-portal too.
+
+## [1.1.0] — 2026-10-09
 
 Service credentials per direction (requirement-portal ADR-0099, ADR-0104): each service can hold
 only its own client secret, and the receiving service holds none.

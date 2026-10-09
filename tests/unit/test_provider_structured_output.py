@@ -103,6 +103,21 @@ def test_openai_parse_sends_the_configured_model_timeout_and_schema() -> None:
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "user"},
     ]
+    assert kwargs["max_completion_tokens"] is openai.omit
+
+
+def test_openai_output_cap_is_sent_as_max_completion_tokens() -> None:
+    parse = _reply(Answer(text="ok"))
+    sdk = MagicMock()
+    sdk.chat.completions.parse = parse
+
+    OpenAIStructuredOutputClient(
+        sdk, model="gpt-test", timeout_seconds=12.5, max_output_tokens=4096
+    ).parse(system_prompt="sys", user_prompt="user", schema_type=Answer)
+
+    assert parse.call_args.kwargs["max_completion_tokens"] == 4096
+    with pytest.raises(ValueError):
+        OpenAIStructuredOutputClient(sdk, model="m", timeout_seconds=1, max_output_tokens=0)
 
 
 def test_openai_images_are_sent_as_separate_data_url_parts() -> None:

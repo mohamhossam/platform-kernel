@@ -138,7 +138,7 @@ def test_client_id_names_the_caller_when_azp_is_absent() -> None:
         _service_token(azp="requirement-spa"),
         _service_token(aud="requirement-api"),
         _service_token(iss="https://elsewhere.example.test"),
-        _service_token(exp=datetime.now(UTC) - timedelta(minutes=1)),
+        _service_token(exp=datetime.now(UTC) - timedelta(minutes=5)),
         _service_token(exp=None),
         _service_token(rsa.generate_private_key(public_exponent=65537, key_size=2048)),
         "not-a-jwt",
@@ -160,6 +160,15 @@ def test_client_id_names_the_caller_when_azp_is_absent() -> None:
 def test_other_tokens_are_refused(token: str) -> None:
     with pytest.raises(ServiceAuthenticationError):
         _jwt_verifier().caller(f"Bearer {token}")
+
+
+def test_a_token_just_past_its_expiry_is_accepted_within_the_clock_leeway() -> None:
+    token = _service_token(exp=datetime.now(UTC) - timedelta(seconds=30))
+
+    assert _jwt_verifier().caller(f"Bearer {token}") == "requirements"
+    strict = ServiceJwtVerifier(_keys(), INTERNAL_AUDIENCE, CLIENTS, leeway_seconds=0)
+    with pytest.raises(ServiceAuthenticationError):
+        strict.caller(f"Bearer {token}")
 
 
 def test_an_unreachable_issuer_is_reported_as_unavailable() -> None:

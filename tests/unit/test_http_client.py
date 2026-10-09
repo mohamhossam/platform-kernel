@@ -1,4 +1,5 @@
-"""The internal HTTP client: token, correlation, bounded retries, and error mapping."""
+"""The internal HTTP client: token, correlation, bounded retries, the circuit breaker, and
+error mapping."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import httpx
 import pytest
 
 from smb_kernel.errors import ServiceResponseError, ServiceUnavailableError
-from smb_kernel.http.client import CORRELATION_HEADER, InternalHttpClient
+from smb_kernel.http.client import CORRELATION_HEADER, CircuitBreaker, InternalHttpClient
 from smb_kernel.observability.correlation import correlation_scope
 
 TOKEN = "t" * 40
@@ -208,3 +209,131 @@ def test_an_empty_token_from_a_source_is_unavailable_not_sent() -> None:
     client = _sourced_client(lambda: " ", httpx.MockTransport(handle))
     with pytest.raises(ServiceUnavailableError):
         client.get_json("/internal/a")
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _guarded(
+    handle: httpx.MockTransport, clock: _Clock, token: str | Callable[[], str] = TOKEN
+) -> InternalHttpClient:
+    return InternalHttpClient(
+        "http://knowledge-api:8000",
+        token,
+        service="knowledge",
+        retries=0,
+        http=httpx.Client(transport=handle),
+        sleep=lambda _seconds: None,
+        breaker=CircuitBreaker(failure_threshold=2, open_seconds=30, monotonic_seconds=clock),
+    )
+
+
+def test_repeated_unavailability_opens_the_circuit_until_a_test_call_succeeds() -> None:
+    clock = _Clock()
+    answers = [503, 503, 200]
+    calls: list[int] = []
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(answers.pop(0), json={})
+
+    client = _guarded(httpx.MockTransport(handle), clock)
+    for _ in range(2):
+        with pytest.raises(ServiceUnavailableError):
+            client.get_json("/internal/a")
+    with pytest.raises(ServiceUnavailableError, match="paused after repeated failures"):
+        client.get_json("/internal/a")
+    assert len(calls) == 2  # Refused without a request.
+
+    clock.now = 30
+    assert client.get_json("/internal/a") == {}
+    assert len(calls) == 3
+
+
+def test_a_failed_test_call_opens_the_circuit_for_another_pause() -> None:
+    clock = _Clock()
+    breaker = CircuitBreaker(failure_threshold=1, open_seconds=30, monotonic_seconds=clock)
+    states: list[str] = []
+    breaker.failed()
+    states.append(breaker.state)
+
+    clock.now = 30
+    states.append(breaker.state)
+    assert breaker.allow()
+    assert not breaker.allow()  # One test call at a time.
+    breaker.failed()
+    states.append(breaker.state)
+    clock.now = 59
+    assert not breaker.allow()
+    clock.now = 60
+    assert breaker.allow()
+    breaker.succeeded()
+    states.append(breaker.state)
+
+    assert states == ["open", "half_open", "open", "closed"]
+
+
+def test_a_refusal_shows_the_peer_is_up_and_resets_the_count() -> None:
+    clock = _Clock()
+    answers = [503, 404, 503]
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(answers.pop(0), json={"detail": "x"})
+
+    client = _guarded(httpx.MockTransport(handle), clock)
+    with pytest.raises(ServiceUnavailableError):
+        client.get_json("/internal/a")
+    with pytest.raises(ServiceResponseError):
+        client.get_json("/internal/a")
+    with pytest.raises(ServiceUnavailableError, match="unavailable \\(503\\)"):
+        client.get_json("/internal/a")
+
+
+def test_failed_token_grants_count_and_an_open_circuit_stops_asking_for_tokens() -> None:
+    clock = _Clock()
+    grants: list[int] = []
+
+    def refused_grant() -> str:
+        grants.append(1)
+        raise ServiceUnavailableError("The identity provider could not be reached.")
+
+    def handle(_request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("nothing is sent without a token")
+
+    client = _guarded(httpx.MockTransport(handle), clock, refused_grant)
+    for _ in range(3):
+        with pytest.raises(ServiceUnavailableError):
+            client.get_json("/internal/a")
+    assert len(grants) == 2
+
+
+def test_a_call_that_ends_unexpectedly_frees_the_test_slot() -> None:
+    clock = _Clock()
+    breaker = CircuitBreaker(failure_threshold=1, open_seconds=30, monotonic_seconds=clock)
+    breaker.failed()
+    clock.now = 30
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("bug")
+
+    client = InternalHttpClient(
+        "http://knowledge-api:8000",
+        TOKEN,
+        service="knowledge",
+        http=httpx.Client(transport=httpx.MockTransport(handle)),
+        breaker=breaker,
+    )
+    with pytest.raises(RuntimeError):
+        client.get_json("/internal/a")
+    assert breaker.allow()
+
+
+@pytest.mark.parametrize("threshold,pause", [(0, 30.0), (1, 0.0)])
+def test_a_breaker_needs_a_threshold_and_a_pause(threshold: int, pause: float) -> None:
+    with pytest.raises(ValueError):
+        CircuitBreaker(failure_threshold=threshold, open_seconds=pause)

@@ -1,6 +1,9 @@
 """Generic OIDC discovery, JWKS, and bearer-token validation tests."""
 
+import threading
+import time
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import jwt
@@ -12,7 +15,7 @@ from smb_kernel.errors import (
     AuthenticationRequiredError,
     IdentityProviderUnavailableError,
 )
-from smb_kernel.identity.oidc import OidcIdentityProvider
+from smb_kernel.identity.oidc import OidcIdentityProvider, OidcSigningKeys
 from smb_kernel.identity.ports import IdentityCredential
 
 ISSUER = "https://identity.example.test"
@@ -44,7 +47,7 @@ def _token(
     return jwt.encode(claims, private, algorithm="RS256", headers={"kid": key_id})
 
 
-def _provider(jwks: list[dict[str, object]]) -> OidcIdentityProvider:
+def _provider(jwks: list[dict[str, object]], **options: Any) -> OidcIdentityProvider:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("openid-configuration"):
             return httpx.Response(200, json={"issuer": ISSUER, "jwks_uri": f"{ISSUER}/keys"})
@@ -56,6 +59,7 @@ def _provider(jwks: list[dict[str, object]]) -> OidcIdentityProvider:
         ("RS256",),
         httpx.Client(transport=httpx.MockTransport(handler)),
         lambda: 0.0,
+        **options,
     )
 
 
@@ -75,7 +79,7 @@ def test_valid_token_maps_to_stable_opaque_actor_without_claim_leakage() -> None
 @pytest.mark.parametrize(
     "changes",
     [
-        {"exp": datetime.now(UTC) - timedelta(minutes=1)},
+        {"exp": datetime.now(UTC) - timedelta(minutes=5)},
         {"iss": "https://attacker.example.test"},
         {"aud": "different-api"},
         {"sub": ""},
@@ -274,3 +278,191 @@ def test_different_unknown_keys_share_one_refresh_window_per_issuer() -> None:
         provider.authenticate(IdentityCredential(_token(second_private, "missing-two")))
 
     assert jwks_loads == 2
+
+
+def test_a_minute_of_clock_difference_with_the_issuer_is_tolerated() -> None:
+    private, public = _key("primary")
+    just_expired = _token(private, "primary", exp=datetime.now(UTC) - timedelta(seconds=30))
+    issued_ahead = _token(private, "primary", iat=datetime.now(UTC) + timedelta(seconds=30))
+
+    provider = _provider([public])
+    provider.authenticate(IdentityCredential(just_expired))
+    provider.authenticate(IdentityCredential(issued_ahead))
+    with pytest.raises(AuthenticationRequiredError):
+        _provider([public], leeway_seconds=0).authenticate(IdentityCredential(just_expired))
+    with pytest.raises(ValueError):
+        _provider([public], leeway_seconds=-1)
+
+
+@pytest.mark.parametrize("token_type", ["ID", "Refresh", "Logout"])
+def test_a_token_that_is_not_an_access_token_is_refused(token_type: str) -> None:
+    private, public = _key("primary")
+
+    with pytest.raises(AuthenticationRequiredError, match="not an access token"):
+        _provider([public]).authenticate(
+            IdentityCredential(_token(private, "primary", typ=token_type))
+        )
+
+
+@pytest.mark.parametrize("token_type", ["Bearer", "bearer", None])
+def test_an_access_token_or_an_untyped_token_is_accepted(token_type: str | None) -> None:
+    private, public = _key("primary")
+    claims = {} if token_type is None else {"typ": token_type}
+
+    _provider([public]).authenticate(IdentityCredential(_token(private, "primary", **claims)))
+
+
+def test_authorized_parties_refuse_tokens_issued_to_another_client() -> None:
+    private, public = _key("primary")
+    provider = _provider([public], authorized_parties=("requirement-spa",))
+
+    provider.authenticate(IdentityCredential(_token(private, "primary", azp="requirement-spa")))
+    for other in ({"azp": "requirement-service"}, {}):
+        with pytest.raises(AuthenticationRequiredError, match="another client"):
+            provider.authenticate(IdentityCredential(_token(private, "primary", **other)))
+    # Without authorized parties, any client's token for the audience is accepted.
+    _provider([public]).authenticate(
+        IdentityCredential(_token(private, "primary", azp="requirement-service"))
+    )
+
+
+class _Issuer:
+    """A mock issuer whose key endpoint can fail, or hold a request until released."""
+
+    def __init__(self, jwks: list[dict[str, object]]) -> None:
+        self.jwks = jwks
+        self.loads = 0
+        self.failing = False
+        self.hold = threading.Event()
+        self.hold.set()
+        self.holding = threading.Event()
+
+    def client(self) -> httpx.Client:
+        return httpx.Client(transport=httpx.MockTransport(self._handle))
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("openid-configuration"):
+            return httpx.Response(200, json={"issuer": ISSUER, "jwks_uri": f"{ISSUER}/keys"})
+        self.loads += 1
+        # The answer is fixed when the request arrives, however long it is held.
+        jwks, failing = self.jwks, self.failing
+        self.holding.set()
+        assert self.hold.wait(5)
+        if failing:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"keys": jwks})
+
+
+def test_a_failed_scheduled_reload_serves_the_last_good_keys_and_retries_later() -> None:
+    _, public = _key("primary")
+    issuer = _Issuer([public])
+    now = [0.0]
+    keys = OidcSigningKeys(
+        ISSUER, issuer.client(), lambda: now[0], jwks_ttl_seconds=900, retry_seconds=30
+    )
+    assert keys.key("primary") is not None
+
+    issuer.failing = True
+    now[0] = 900
+    assert keys.key("primary") is not None
+    now[0] = 910
+    assert keys.key("primary") is not None
+    assert issuer.loads == 2  # No new attempt before the retry interval.
+    now[0] = 930
+    assert keys.key("primary") is not None
+    assert issuer.loads == 3
+
+    issuer.failing = False
+    now[0] = 960
+    keys.key("primary")
+    now[0] = 1000
+    keys.key("primary")
+    assert issuer.loads == 4  # Back on the normal reload interval.
+
+
+def test_callers_with_cached_keys_are_not_held_up_by_a_reload() -> None:
+    _, public = _key("primary")
+    issuer = _Issuer([public])
+    now = [0.0]
+    keys = OidcSigningKeys(ISSUER, issuer.client(), lambda: now[0], jwks_ttl_seconds=900)
+    keys.key("primary")
+    now[0] = 900
+    issuer.hold.clear()
+    issuer.holding.clear()
+    reloading = threading.Thread(target=keys.key, args=("primary",))
+    reloading.start()
+    try:
+        assert issuer.holding.wait(5)
+        # The reload is under way and held: another caller is answered from the cache.
+        assert keys.key("primary") is not None
+    finally:
+        issuer.hold.set()
+        reloading.join(5)
+    assert issuer.loads == 2
+
+
+def test_callers_on_a_cold_cache_share_one_fetch() -> None:
+    _, public = _key("primary")
+    issuer = _Issuer([public])
+    keys = OidcSigningKeys(ISSUER, issuer.client(), lambda: 0.0)
+    issuer.hold.clear()
+    results: list[object] = []
+    callers = [
+        threading.Thread(target=lambda: results.append(keys.key("primary"))) for _ in range(4)
+    ]
+    for caller in callers:
+        caller.start()
+    assert issuer.holding.wait(5)
+    issuer.hold.set()
+    for caller in callers:
+        caller.join(5)
+
+    assert len(results) == 4
+    assert issuer.loads == 1
+
+
+def test_an_unknown_key_that_cannot_be_looked_up_is_unavailable_not_invalid() -> None:
+    _, public = _key("primary")
+    issuer = _Issuer([public])
+    keys = OidcSigningKeys(ISSUER, issuer.client(), lambda: 0.0)
+    keys.key("primary")
+    issuer.failing = True
+
+    with pytest.raises(IdentityProviderUnavailableError):
+        keys.key("rotated")
+    # Inside the unknown-key window, the same answer, without another fetch.
+    with pytest.raises(IdentityProviderUnavailableError):
+        keys.key("rotated")
+    assert issuer.loads == 2
+    # A key the cache holds is still served.
+    assert keys.key("primary") is not None
+
+
+def test_a_key_lookup_does_not_settle_for_a_reload_that_began_before_it_asked() -> None:
+    _, old_public = _key("old")
+    _, new_public = _key("new")
+    issuer = _Issuer([old_public])
+    now = [0.0]
+    keys = OidcSigningKeys(ISSUER, issuer.client(), lambda: now[0], jwks_ttl_seconds=900)
+    keys.key("old")
+    # A scheduled reload starts and is held, still answering with the old keys.
+    now[0] = 900
+    issuer.hold.clear()
+    issuer.holding.clear()
+    reloading = threading.Thread(target=keys.key, args=("old",))
+    reloading.start()
+    assert issuer.holding.wait(5)
+    # Meanwhile the issuer rotates, and a token signed with the new key arrives.
+    found: list[object] = []
+    looking = threading.Thread(target=lambda: found.append(keys.key("new")))
+    looking.start()
+    issuer.jwks = [new_public]
+    deadline = time.monotonic() + 5
+    while keys._last_unknown_refresh != 900 and time.monotonic() < deadline:
+        time.sleep(0.01)  # Until the lookup is waiting on the held reload.
+    issuer.hold.set()
+    reloading.join(5)
+    looking.join(5)
+
+    assert found and found[0] is not None
+    assert issuer.loads == 3

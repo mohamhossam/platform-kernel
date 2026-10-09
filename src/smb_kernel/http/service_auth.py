@@ -32,7 +32,7 @@ from smb_kernel.errors import (
     IdentityProviderUnavailableError,
     ServiceAuthenticationError,
 )
-from smb_kernel.identity.oidc import OidcSigningKeys
+from smb_kernel.identity.oidc import DEFAULT_LEEWAY_SECONDS, OidcSigningKeys
 
 INTERNAL_PREFIX = "/internal"
 CALLER_SCOPE_KEY = "smb_service_caller"
@@ -81,7 +81,8 @@ class ServiceJwtVerifier:
     algorithm, name the issuer and `audience`, and not have expired. The client
     it was granted to (`azp`, or `client_id` when `azp` is absent) must be one of
     `callers`, which maps client IDs to the caller names the routes see. A
-    person's token never names a service client, so it is refused.
+    person's token never names a service client, so it is refused. Time claims
+    allow `leeway_seconds` of clock difference with the issuer.
     """
 
     def __init__(
@@ -91,7 +92,7 @@ class ServiceJwtVerifier:
         callers: Mapping[str, str],
         *,
         allowed_algorithms: tuple[str, ...] = ("RS256",),
-        leeway_seconds: float = 0.0,
+        leeway_seconds: float = DEFAULT_LEEWAY_SECONDS,
     ) -> None:
         cleaned = {client.strip(): caller.strip() for client, caller in callers.items()}
         if not audience.strip():

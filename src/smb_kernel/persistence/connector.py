@@ -10,8 +10,10 @@ unaware which one they were given.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
+from threading import Lock
 from typing import Protocol
 
 import psycopg
@@ -71,8 +73,23 @@ class DirectPostgresConnector:
         return None
 
 
+@dataclass(frozen=True)
+class PoolStats:
+    """A pool at one moment: connections lent out and idle, its ceiling, and borrowers waiting."""
+
+    in_use: int
+    idle: int
+    max_size: int
+    waiting: int
+
+
 class PooledPostgresConnector:
-    """A bounded pool shared by every adapter in one long-running process."""
+    """A bounded pool shared by every adapter in one long-running process.
+
+    `configure` runs once on each new connection before the pool hands it out,
+    for session settings such as `statement_timeout`. A transaction it leaves
+    open is committed, so the connection joins the pool idle.
+    """
 
     def __init__(
         self,
@@ -83,6 +100,7 @@ class PooledPostgresConnector:
         acquire_timeout_seconds: float,
         max_idle_seconds: float,
         name: str | None = None,
+        configure: Callable[[DbConnection], None] | None = None,
     ) -> None:
         # The application names its pool, for psycopg_pool's logs and stats;
         # left unset, the pool takes psycopg_pool's own numbered name.
@@ -96,8 +114,12 @@ class PooledPostgresConnector:
             # restart surfaces as a reconnect rather than a failed request.
             check=ConnectionPool.check_connection,
             name=name,
+            configure=None if configure is None else _settled(configure),
             open=False,
         )
+        # Counted here: the pool's own size also counts connections still opening.
+        self._lent = 0
+        self._lent_lock = Lock()
 
     def open(self) -> None:
         """Start filling the pool without blocking boot on database availability.
@@ -107,8 +129,22 @@ class PooledPostgresConnector:
         """
         self._pool.open(wait=False)
 
+    def stats(self) -> PoolStats:
+        """The pool's current use; cheap enough to read on every metrics scrape."""
+        raw = self._pool.get_stats()
+        with self._lent_lock:
+            in_use = self._lent
+        return PoolStats(
+            in_use=in_use,
+            idle=raw.get("pool_available", 0),
+            max_size=self._pool.max_size,
+            waiting=raw.get("requests_waiting", 0),
+        )
+
     def acquire(self) -> DbConnection:
-        return self._pool.getconn()
+        connection = self._pool.getconn()
+        self._count_lent(1)
+        return connection
 
     def release(self, connection: DbConnection) -> None:
         # End an abandoned transaction here: the pool would do the same, but
@@ -121,12 +157,34 @@ class PooledPostgresConnector:
                 connection.rollback()
             except psycopg.Error:
                 pass  # A broken connection is discarded by putconn below.
-        self._pool.putconn(connection)
+        try:
+            self._pool.putconn(connection)
+        finally:
+            self._count_lent(-1)
 
     @contextmanager
     def connection(self, timeout_seconds: float | None = None) -> Iterator[DbConnection]:
         with self._pool.connection(timeout=timeout_seconds) as connection:
-            yield connection
+            self._count_lent(1)
+            try:
+                yield connection
+            finally:
+                self._count_lent(-1)
+
+    def _count_lent(self, change: int) -> None:
+        with self._lent_lock:
+            self._lent += change
 
     def close(self) -> None:
         self._pool.close()
+
+
+def _settled(configure: Callable[[DbConnection], None]) -> Callable[[DbConnection], None]:
+    """Run `configure`, then commit what it began: the pool accepts only idle connections."""
+
+    def run(connection: DbConnection) -> None:
+        configure(connection)
+        if connection.info.transaction_status == TransactionStatus.INTRANS:
+            connection.commit()
+
+    return run

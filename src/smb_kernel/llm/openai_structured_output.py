@@ -27,12 +27,27 @@ from smb_kernel.llm.structured_output import (
 
 
 class OpenAIStructuredOutputClient:
-    """One structured chat completion per call against the OpenAI API."""
+    """One structured chat completion per call against the OpenAI API.
 
-    def __init__(self, client: OpenAI, *, model: str, timeout_seconds: float) -> None:
+    `max_output_tokens` caps each reply, sent as `max_completion_tokens` (which
+    also bounds a reasoning model's hidden reasoning). A reply cut off at the cap
+    fails as truncated output. None leaves the model's own limit.
+    """
+
+    def __init__(
+        self,
+        client: OpenAI,
+        *,
+        model: str,
+        timeout_seconds: float,
+        max_output_tokens: int | None = None,
+    ) -> None:
+        if max_output_tokens is not None and max_output_tokens <= 0:
+            raise ValueError("The output token cap must be positive, or None.")
         self._client = client
         self._model = model
         self._timeout_seconds = timeout_seconds
+        self._max_output_tokens = max_output_tokens
 
     @property
     def model(self) -> str:
@@ -73,6 +88,9 @@ class OpenAIStructuredOutputClient:
                 ),
                 response_format=schema_type,
                 timeout=self._timeout_seconds,
+                max_completion_tokens=(
+                    openai.omit if self._max_output_tokens is None else self._max_output_tokens
+                ),
             )
         except openai.LengthFinishReasonError as exc:
             cut_off = OutputTruncatedError()

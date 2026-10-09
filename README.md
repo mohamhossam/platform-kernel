@@ -22,7 +22,7 @@ The decisions are recorded in requirement-portal's ADR-0098 (three repositories)
 | Embeddings (`smb_kernel.embeddings`, `llm.compatible_transport`) | The `Embedding` value and the configured embedding adapter | Retrieval behaviour |
 | Persistence (`smb_kernel.persistence`) | Direct and pooled connectors, `run_migrations(url, migrations_dir, legacy_names)` | Schemas, migrations, repositories |
 | Operations (`smb_kernel.observability`, `smb_kernel.time`, `smb_kernel.diagnostics`) | Correlation, logging, Prometheus metrics and provider metering, clocks, the opt-in debug trace | Domain metrics and errors |
-| Internal HTTP (`smb_kernel.http`) | `InternalHttpClient`, `InternalRouteGuard` with `ServiceTokenVerifier`, `RequestBodyLimit` | API models and contracts |
+| Internal HTTP (`smb_kernel.http`) | `InternalHttpClient`, `ClientCredentialsTokenSource`, `InternalRouteGuard` with `ServiceTokenVerifier`, `ServiceJwtVerifier` or both (`ServiceVerifierChain`), `RequestBodyLimit` | API models and contracts |
 
 If a change needs a role name, a prompt, a schema or a request model, it belongs in an
 application. The kernel's import-linter forbids importing either application, and keeps the

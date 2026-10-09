@@ -1,9 +1,11 @@
 """The base every service-to-service adapter builds on.
 
-It owns the mechanics only: the service token, timeouts, bounded retries with
-backoff, forwarding the correlation ID, and turning transport failures into
-kernel errors. Request and response models belong to the calling adapter,
-which validates what comes back before handing it to its domain.
+It owns the mechanics only: the service token (a shared secret, or a callable
+such as `ClientCredentialsTokenSource` that returns the current one), timeouts,
+bounded retries with backoff, forwarding the correlation ID, and turning
+transport failures into kernel errors. Request and response models belong to
+the calling adapter, which validates what comes back before handing it to its
+domain.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ class InternalHttpClient:
     def __init__(
         self,
         base_url: str,
-        token: str,
+        token: str | Callable[[], str],
         *,
         service: str,
         timeout_seconds: float = 10.0,
@@ -34,7 +36,7 @@ class InternalHttpClient:
         http: httpx.Client | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        if not base_url.strip() or not token.strip():
+        if not base_url.strip() or (isinstance(token, str) and not token.strip()):
             raise ValueError("An internal client needs a base URL and a service token.")
         if retries < 0:
             raise ValueError("Retries must not be negative.")
@@ -57,12 +59,16 @@ class InternalHttpClient:
 
     def _request(self, method: str, path: str, *, retry: bool, **kwargs: Any) -> Any:
         url = f"{self._base_url}/{path.lstrip('/')}"
-        headers = {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
+        headers = {"Accept": "application/json"}
         correlation_id = current_correlation_id()
         if correlation_id:
             headers[CORRELATION_HEADER] = correlation_id
         attempts = 1 + (self._retries if retry else 0)
-        for attempt in range(1, attempts + 1):
+        renewed = False
+        attempt = 0
+        while attempt < attempts:
+            attempt += 1
+            headers["Authorization"] = f"Bearer {self._current_token()}"
             try:
                 response = self._http.request(
                     method, url, headers=headers, timeout=self._timeout, **kwargs
@@ -77,8 +83,22 @@ class InternalHttpClient:
             if response.status_code in _RETRYABLE_STATUS and attempt < attempts:
                 self._sleep(self._backoff * 2 ** (attempt - 1))
                 continue
+            invalidate = getattr(self._token, "invalidate", None)
+            if response.status_code == 401 and callable(invalidate) and not renewed:
+                # The guard refused the token before the route ran, so sending
+                # the request again with a freshly granted one repeats nothing.
+                invalidate()
+                renewed = True
+                attempt -= 1
+                continue
             return self._decode(response)
         raise AssertionError("unreachable")  # pragma: no cover
+
+    def _current_token(self) -> str:
+        token = self._token if isinstance(self._token, str) else self._token()
+        if not token.strip():
+            raise ServiceUnavailableError(f"No service token is available for {self.service}.")
+        return token
 
     def _decode(self, response: httpx.Response) -> Any:
         if response.status_code >= 500 or response.status_code in _RETRYABLE_STATUS:

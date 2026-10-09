@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smb-platform-kernel"
-version = "1.0.2"
+version = "1.1.0"
 description = "Shared mechanisms for the requirement and knowledge portals: identity, document extraction, model transport, persistence, observability and service-to-service calls."
 requires-python = ">=3.12"
 dependencies = [

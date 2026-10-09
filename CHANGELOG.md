@@ -3,6 +3,38 @@
 All notable changes to `smb-platform-kernel`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## [1.1.0] — Unreleased
+
+Service credentials per direction (requirement-portal ADR-0099, ADR-0104): each service can hold
+only its own client secret, and the receiving service holds none.
+
+### Added
+- `smb_kernel.http.client_credentials.ClientCredentialsTokenSource`: grants a service an access
+  token through the issuer's client-credentials grant (the token endpoint comes from discovery and
+  must use HTTPS), caches it, and renews it before it expires. Calling it returns the current
+  token; `invalidate()` drops it. Any failure raises `ServiceUnavailableError`.
+- `InternalHttpClient` takes a callable in place of the token, such as the source above, and asks
+  it for the token on each attempt. When the token has `invalidate()` and the peer answers 401,
+  the client renews it and sends the request once more; the guard refused it before any route
+  ran, so this is safe for a non-idempotent POST too.
+- `smb_kernel.http.service_auth.ServiceJwtVerifier`: accepts a service access token signed by the
+  issuer with an asymmetric algorithm, for the configured audience, and maps the client it was
+  granted to (`azp`, else `client_id`) to a caller name. A person's token never names a service
+  client, so it is refused.
+- `ServiceVerifierChain`: accepts a token any of its verifiers accepts, so a deployment can take
+  shared secrets and granted tokens together while it moves over, or keep shared secrets for
+  offline runs.
+- `ServiceCallerVerifier`, the protocol `InternalRouteGuard` now takes (`ServiceTokenVerifier`
+  still satisfies it).
+- `smb_kernel.identity.oidc.OidcSigningKeys` and `discover_oidc`: the discovery and signing-key
+  cache `OidcIdentityProvider` used privately, now shared with `ServiceJwtVerifier`.
+  `OidcIdentityProvider` behaves as before.
+
+### Changed
+- `InternalRouteGuard` answers 503 instead of failing when a token cannot be checked because the
+  issuer is unreachable, and runs the verifier in a worker thread, since checking a granted token
+  may fetch the issuer's keys.
+
 ## [1.0.2] — 2026-10-03
 
 ### Fixed

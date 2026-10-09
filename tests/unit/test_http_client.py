@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import httpx
 import pytest
 
@@ -117,3 +119,92 @@ def test_a_body_that_is_not_json_is_unusable() -> None:
 def test_configuration_is_required(base_url: str, token: str) -> None:
     with pytest.raises(ValueError):
         InternalHttpClient(base_url, token, service="knowledge")
+
+
+class _Source:
+    """A token source that hands out a new token each time it is invalidated."""
+
+    def __init__(self) -> None:
+        self.generation = 1
+        self.invalidations = 0
+
+    def __call__(self) -> str:
+        return f"granted-{self.generation}"
+
+    def invalidate(self) -> None:
+        self.invalidations += 1
+        self.generation += 1
+
+
+def _sourced_client(source: Callable[[], str], handle: httpx.MockTransport) -> InternalHttpClient:
+    return InternalHttpClient(
+        "http://knowledge-api:8000",
+        source,
+        service="knowledge",
+        http=httpx.Client(transport=handle),
+        sleep=lambda _seconds: None,
+    )
+
+
+def test_a_token_source_is_asked_for_the_current_token_on_each_request() -> None:
+    seen: list[str] = []
+    tokens = iter(["first", "second"])
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["Authorization"])
+        return httpx.Response(200, json={})
+
+    client = _sourced_client(lambda: next(tokens), httpx.MockTransport(handle))
+    client.get_json("/internal/a")
+    client.get_json("/internal/b")
+    assert seen == ["Bearer first", "Bearer second"]
+
+
+def test_a_refused_granted_token_is_renewed_once_even_for_a_post() -> None:
+    seen: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["Authorization"])
+        if request.headers["Authorization"] == "Bearer granted-1":
+            return httpx.Response(401, json={"detail": "expired"})
+        return httpx.Response(200, json={"ok": True})
+
+    source = _Source()
+    client = _sourced_client(source, httpx.MockTransport(handle))
+    assert client.post_json("/internal/write", {}) == {"ok": True}
+    assert seen == ["Bearer granted-1", "Bearer granted-2"]
+    assert source.invalidations == 1
+
+
+def test_a_token_refused_again_after_renewal_is_reported() -> None:
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"detail": "The service token is not recognised."})
+
+    source = _Source()
+    client = _sourced_client(source, httpx.MockTransport(handle))
+    with pytest.raises(ServiceResponseError) as raised:
+        client.get_json("/internal/a")
+    assert raised.value.status_code == 401
+    assert source.invalidations == 1
+
+
+def test_a_shared_token_is_not_renewed_on_401() -> None:
+    calls: list[int] = []
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(401, json={"detail": "no"})
+
+    client, _ = _client(httpx.MockTransport(handle))
+    with pytest.raises(ServiceResponseError):
+        client.get_json("/internal/a")
+    assert len(calls) == 1
+
+
+def test_an_empty_token_from_a_source_is_unavailable_not_sent() -> None:
+    def handle(_request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("nothing is sent without a token")
+
+    client = _sourced_client(lambda: " ", httpx.MockTransport(handle))
+    with pytest.raises(ServiceUnavailableError):
+        client.get_json("/internal/a")

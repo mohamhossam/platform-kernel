@@ -3,6 +3,42 @@
 All notable changes to `smb-platform-kernel`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
+## [1.3.0] — Unreleased
+
+Optional OpenTelemetry tracing for requirement-portal (its `docs/slices/production-hardening.md`,
+PR 14). Additive: nothing is traced until an application configures it, and log lines are
+unchanged while no span is recorded.
+
+### Added
+- `smb_kernel.observability.tracing` (needs only `opentelemetry-api`, now a dependency):
+  - `TracedTransport` (httpx) and `TracedTransport2` (httpx2, the OpenAI SDK's client): a
+    client span per request with the method, the peer's host and port, a `peer` name and the
+    status. No path, query, header or body is recorded. A transport error records its type
+    only.
+  - `propagate=True` also sends W3C `traceparent` (never `baggage`). Keep it for your own
+    peers, so a trace ID never reaches a model or identity provider.
+  - `current_trace_ids()`: the open span's trace and span IDs, or `None`.
+- `smb_kernel.observability.tracing_setup` (the new `tracing` extra: the OpenTelemetry SDK,
+  the OTLP/HTTP exporter and the psycopg instrumentation):
+  - `configure_tracing(endpoint, service=, version=, sample_ratio=1.0)` returns a `Tracing`
+    that exports over OTLP/HTTP to `<endpoint>/v1/traces`, sampling new traces at
+    `sample_ratio` and always following a sampled parent. A client span (SQL or an outbound
+    call) with no span around it starts no trace, so background polling stays out. It installs
+    no global provider.
+  - `Tracing.span(name, attributes)`: a span around a block; an exception ends it in error
+    with its type only.
+  - `Tracing.request_span(method, headers)`: a server span continuing the caller's
+    `traceparent`; `RequestSpan.finish(route, status_code)` names it by the route template.
+    The path and query are never recorded.
+  - `Tracing.instrument_connection(connection)`: traces the statements a connection runs, with
+    their placeholders and never the values. It suits `PooledPostgresConnector(configure=…)`.
+  - `Tracing.shutdown()` exports what is buffered. `NO_TRACING` is the off value: it records
+    and sends nothing.
+
+### Changed
+- `JsonLogFormatter` adds `trace_id` and `span_id` while a recorded span is open. Without one,
+  lines are as before.
+
 ## [1.2.0] — Unreleased
 
 Production hardening for requirement-portal (its `docs/slices/production-hardening.md`, Phase 0).

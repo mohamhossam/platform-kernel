@@ -1,6 +1,7 @@
 """Process log configuration: readable text locally, one JSON object per line in production.
 
-Operational logs record what happened, how long it took and the correlation ID.
+Operational logs record what happened, how long it took and the correlation ID,
+and in JSON the trace and span IDs while a recorded span is open.
 They never carry requirement text or provider payloads; that is the opt-in
 debug trace's job.
 """
@@ -17,6 +18,7 @@ from typing import TextIO
 from smb_kernel.observability.correlation import (
     current_correlation_id,
 )
+from smb_kernel.observability.tracing import current_trace_ids
 
 
 class LogFormat(Enum):
@@ -51,6 +53,9 @@ class JsonLogFormatter(logging.Formatter):
         correlation_id = current_correlation_id()
         if correlation_id:
             payload["correlation_id"] = correlation_id
+        trace_ids = current_trace_ids()
+        if trace_ids is not None:
+            payload["trace_id"], payload["span_id"] = trace_ids
         payload.update(
             (key, value)
             for key, value in record.__dict__.items()

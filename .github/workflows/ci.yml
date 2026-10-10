@@ -37,7 +37,7 @@ jobs:
 
       - name: Install locked project
         run: |
-          uv sync --locked --extra dev
+          uv sync --locked --extra dev --extra tracing
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: pytest with coverage

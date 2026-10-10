@@ -21,7 +21,7 @@ The decisions are recorded in requirement-portal's ADR-0098 (three repositories)
 | LLM (`smb_kernel.llm`) | Structured-output transports (compatible, OpenAI, OpenRouter, local), model profiles | Prompts, schemas, and output interpretation |
 | Embeddings (`smb_kernel.embeddings`, `llm.compatible_transport`) | The `Embedding` value and the configured embedding adapter | Retrieval behaviour |
 | Persistence (`smb_kernel.persistence`) | Direct and pooled connectors (with a session `configure` hook and `stats()`), `run_migrations(url, migrations_dir, legacy_names)` with a runner lock and a per-file `lock_timeout` | Schemas, migrations, repositories |
-| Operations (`smb_kernel.observability`, `smb_kernel.time`, `smb_kernel.diagnostics`) | Correlation, logging, Prometheus metrics and provider metering, clocks, the opt-in debug trace | Domain metrics and errors |
+| Operations (`smb_kernel.observability`, `smb_kernel.time`, `smb_kernel.diagnostics`) | Correlation, logging, Prometheus metrics and provider metering, optional OpenTelemetry tracing (`tracing` extra), clocks, the opt-in debug trace | Domain metrics and errors |
 | Internal HTTP (`smb_kernel.http`) | `InternalHttpClient` with its `CircuitBreaker`, `ClientCredentialsTokenSource`, `InternalRouteGuard` with `ServiceTokenVerifier`, `ServiceJwtVerifier` or both (`ServiceVerifierChain`), `RequestBodyLimit` | API models and contracts |
 
 If a change needs a role name, a prompt, a schema or a request model, it belongs in an
@@ -44,13 +44,15 @@ dependencies = ["smb-platform-kernel"]
 smb-platform-kernel = { git = "https://github.com/mohamhossam/platform-kernel", tag = "v1.0.2" }
 ```
 
+Tracing needs the `tracing` extra: `"smb-platform-kernel[tracing]"`.
+
 To develop against a local checkout before a release, point the source at the folder instead:
 `smb-platform-kernel = { path = "../platform-kernel", editable = true }`. Never commit that.
 
 ## Developing
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev --extra tracing
 ```
 
 ```bash

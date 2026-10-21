@@ -3,7 +3,13 @@
 All notable changes to `smb-platform-kernel`. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow semantic versioning.
 
-## [1.3.0] — Unreleased
+## [1.3.1] — 2026-10-21
+
+### Changed
+- Allows Pillow 13 (`Pillow>=12.3,<14`): every 12.x release carries the October 2026 Pillow
+  advisories, fixed only in 13.0.0. No code change; the full suite passes on both.
+
+## [1.3.0] — 2026-10-10
 
 Optional OpenTelemetry tracing for requirement-portal (its `docs/slices/production-hardening.md`,
 PR 14). Additive: nothing is traced until an application configures it, and log lines are
@@ -39,7 +45,7 @@ unchanged while no span is recorded.
 - `JsonLogFormatter` adds `trace_id` and `span_id` while a recorded span is open. Without one,
   lines are as before.
 
-## [1.2.0] — Unreleased
+## [1.2.0] — 2026-10-09
 
 Production hardening for requirement-portal (its `docs/slices/production-hardening.md`, Phase 0).
 Everything is additive except the defaults marked **Behaviour change**, which both applications
